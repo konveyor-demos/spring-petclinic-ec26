@@ -1,4 +1,4 @@
-= Cloud Migration Workshop
+= Legacy Migration Workshop
 :icons: font
 :toc: left
 :toclevels: 3
@@ -14,11 +14,12 @@ endif::[]
 Migrate applications to the cloud
 ****
 This workshop is about migrating applications to the cloud.
-It is based on the Konveyor framework, in particular on its Kantra tool, which
+It is based on the Konveyor framework, which:
 
 * analyzes (Java) applications for cloud readiness, and
 * supports the migration of (Java) applications to the cloud.
 
+We use **Konveyor Hub** for application analysis and **Konveyor AI** (VS Code extension) for AI-assisted migration.
 We concentrate on Java
 and use a simple example application to demonstrate the migration process.
 The principles and tools can be applied to other languages and applications as well (with some limitations).
@@ -28,9 +29,8 @@ The principles and tools can be applied to other languages and applications as w
 Konveyor is a community-driven project that aims to help organizations modernize their applications and infrastructure.
 It is part of the Cloud Native Computing Foundation (CNCF).
 
-The workshop is based on the Kantra tool, which is part of the Konveyor project.
-Konveyor is usually installed via the OperatorHub in OpenShift or Kubernetes,
-while Kantra can run in any container environment.
+The workshop uses Konveyor Hub (deployed on Kubernetes) for analysis
+and the Konveyor AI VS Code extension for AI-assisted code migration.
 ====
 ****
 
@@ -54,35 +54,32 @@ Konveyor), or
 
 +
 [IMPORTANT]
-.Docker environment settings or Podman usage
+.Podman usage
 ====
-* In case you use _Docker_, you need to set the following environment variable:
-+
-[source, bash]
-export PODMAN_BIN=docker
+All workshop commands use `${DOCKER_BIN:-docker}`, which defaults to `docker`.
+If you use _Docker_, no configuration is needed.
 
-* In case you use Podman, you need to use `podman` instead of `docker` in the examples.
-We will support this by using an environment variable `DOCKER_BIN` in the examples.
-+
+If you use _Podman_, set the following environment variable:
+
 [source, bash]
 export DOCKER_BIN=podman
 
-We recommend using https://direnv.net/[direnv] to set this variable(s) automatically.
+We recommend using https://direnv.net/[direnv] to set this variable automatically.
 ====
 
 * Clone this repository and change your shell directory to it.
 +
 [source, bash]
 ----
-git clone https://github.com/konveyor-demos/spring-petclinic.git
-cd spring-petclinic # <1>
+git clone https://github.com/konveyor-demos/spring-petclinic-ec26.git
+cd spring-petclinic-ec26 # <1>
 ----
 <1> Perform all subsequent commands in this directory.
 
 +
 [TIP]
 ====
-You may use link:WORKSHOP.adoc[this file] (`WORKSHOP.adoc`) for your convenience to copy/paste] commands.
+You may use link:WORKSHOP.adoc[this file] (`WORKSHOP.adoc`) for your convenience to copy/paste commands.
 It works best with an `asciidoctor` plugin for your IDE, e.g., the https://intellij-asciidoc-plugin.ahus1.de/docs/users-guide/index.html[IntelliJ Plugin].
 ====
 
@@ -98,16 +95,406 @@ git checkout workshop
 ${DOCKER_BIN:-docker} compose build
 ----
 
-* Install Java 11 or higher (optional, but recommended), e.g., with https://sdkman.io/[SDKMAN!].
-* Install Kantra by following the https://github.com/konveyor/kantra?tab=readme-ov-file#downloading-stable-release[installation instructions].
+* Install Java 17 or higher, e.g., with https://sdkman.io/[SDKMAN!].
+Java 17 is required from Exercise 3 onwards (Spring Boot 3 migration).
+It is not needed for Exercises 1 and 2.
+
+* A Kubernetes cluster is required for Exercise 2 (Konveyor Hub). Use one of the following:
+** https://minikube.sigs.k8s.io/[minikube] (recommended for this workshop),
+** https://www.docker.com/products/docker-desktop/[Docker Desktop] with Kubernetes enabled, or
+** https://rancherdesktop.io/[Rancher Desktop] with Kubernetes enabled.
 +
 [TIP]
 ====
-In case you want to use the latest version, you can execute the link:scripts/get-kantra.sh[get-kantra.sh] script to download and install Kantra for your convenience.
+If using minikube, ensure you have sufficient resources allocated (at least 4 CPUs and 8 GB memory):
+[source, bash]
+minikube start --cpus=4 --memory=8192
+====
+
+* https://code.visualstudio.com/[Visual Studio Code] is required for Exercise 3 (Konveyor AI).
+
+== Exercises
+
+=== Exercise 1: Run a (scaled) Spring PetClinic application
+
+==== Start with initial application
+
+. Start the Spring PetClinic application in a container.
++
+[source, bash]
+----
+${DOCKER_BIN:-docker} compose up -d
+----
+
+. Upload some images (cf. link:scripts/upload-dummy-image.sh[upload-dummy-image.sh]).
++
+[source, bash]
+----
+./scripts/upload-dummy-image.sh
+# -> Image uploaded successfully
+----
+
+. List the uploaded images (cf. link:scripts/list-images.sh[list-images.sh]).
++
+[source, bash]
+----
+./scripts/list-images.sh
+# -> Image list: ...
+----
+
+==== Scale up
+
+. Now, scale the application to more (>= 2) replicas.
++
+[source, bash]
+----
+${DOCKER_BIN:-docker} compose up -d --scale petclinic=2
+${DOCKER_BIN:-docker} compose restart nginx # necessary to update the load balancer
+----
+
+. List the uploaded images again.
+You should see that the images are distributed across the replicas.
+Either
+
+** You get the list as before:
++
+[source, bash]
+----
+./scripts/list-images.sh
+# -> Image list: ...
+----
+** Or, you get an empty list:
++
+[source, bash]
+----
+./scripts/list-images.sh
+# -> []
+----
+
+. If you add more images, you will even see that they are distributed across the replicas.
+
+[NOTE]
+====
+This demonstrates a common cloud-readiness issue: the application stores files on the local filesystem.
+When scaled to multiple replicas, each replica has its own filesystem and uploaded files are not shared.
+In the next exercises, we will use Konveyor to analyze and address such issues.
+====
+
+=== Exercise 2: Install Konveyor Hub and Analyze the Application
+
+In this exercise, we install Konveyor Hub on a Kubernetes cluster,
+explore its features, and run an analysis of the Spring PetClinic application.
+
+==== Set up OLM (Operator Lifecycle Manager)
+
+Konveyor is installed via OLM. Set it up for your Kubernetes environment.
+
+.For minikube
+[source, bash]
+----
+minikube addons enable olm
+minikube addons enable ingress
+----
+
+.For standard Kubernetes (Docker Desktop, Rancher Desktop)
+[source, bash]
+----
+kubectl apply -f https://raw.githubusercontent.com/operator-framework/operator-lifecycle-manager/master/deploy/upstream/quickstart/crds.yaml
+kubectl apply -f https://raw.githubusercontent.com/operator-framework/operator-lifecycle-manager/master/deploy/upstream/quickstart/olm.yaml
+----
+
+==== Install the Konveyor Operator
+
+Deploy the Konveyor operator using the latest development manifest:
 
 [source, bash]
 ----
-./scripts/get-kantra.sh
+kubectl apply -f https://raw.githubusercontent.com/konveyor/tackle2-operator/main/tackle-k8s.yaml
 ----
+
+This creates the `konveyor-tackle` namespace and installs the required OLM components.
+
+[TIP]
+====
+For released versions, you can also install via https://operatorhub.io/operator/konveyor-operator[OperatorHub].
+For more details, see the https://github.com/konveyor/operator/blob/main/README.md[Konveyor Operator README].
 ====
 
+==== Create the Tackle Custom Resource
+
+[IMPORTANT]
+====
+Konveyor requires a storage class that supports RWX (ReadWriteMany) volumes.
+Review your cluster's storage capabilities before proceeding.
+====
+
+[source, bash]
+----
+cat << EOF | kubectl apply -f -
+kind: Tackle
+apiVersion: tackle.konveyor.io/v1alpha1
+metadata:
+  name: tackle
+  namespace: konveyor-tackle
+spec:
+  feature_auth_required: "false"
+  kai_solution_server_enabled: true
+  rwx_supported: "false"
+  ui_ingress_class_name: nginx # Use "traefik" if using Rancher Desktop ingress
+EOF
+----
+
+==== Verify the Deployment
+
+Deployment typically takes 1-3 minutes. Check the status:
+
+[source, bash]
+----
+kubectl get pods -n konveyor-tackle
+----
+
+You should see pods for the following components:
+
+* `konveyor-tackle`
+* `tackle-hub`
+* `tackle-keycloak-postgresql`
+* `tackle-keycloak-sso`
+* `tackle-operator`
+* `tackle-ui`
+
+==== Access the Konveyor Hub UI
+
+Access the UI in your browser.
+
+.For minikube
+[source, bash]
+----
+echo "http://$(minikube ip)"
+----
+
+.For Docker Desktop / Rancher Desktop
+Access via `http://localhost` (if ingress is configured) or use `kubectl port-forward`:
+[source, bash]
+----
+kubectl port-forward svc/tackle-ui -n konveyor-tackle 8080:8080
+# Then open http://localhost:8080
+----
+
+==== Explore Konveyor Hub Features
+
+Take some time to explore the Konveyor Hub UI:
+
+. **Application Inventory** — Add and manage applications to be analyzed.
+. **Assessment** — Assess applications for cloud readiness using questionnaires.
+. **Analysis Configuration** — Configure analysis targets and rules.
+
+==== Add and Analyze Spring PetClinic
+
+. Navigate to the **Application Inventory** in the Konveyor Hub UI.
+. Add the Spring PetClinic application:
+** Provide the repository URL: `https://github.com/konveyor-demos/spring-petclinic-ec26.git`
+** Set the branch to `workshop`.
+. Configure and run an analysis:
+** Select appropriate targets (e.g., `cloud-readiness`, `azure-aks`).
+** Choose source-only analysis mode.
+** Start the analysis.
+. Review the analysis report.
+** Identify cloud-readiness issues, particularly the local filesystem access pattern.
+** Note the issues that will need to be addressed for cloud migration.
+
+=== Exercise 3: Migrate to Spring Boot 3 with Konveyor AI
+
+In this exercise, we use the Konveyor AI VS Code extension to analyze the application
+and perform an AI-assisted migration from Spring Boot 2 to Spring Boot 3.
+
+==== Install Konveyor AI in VS Code
+
+. Open VS Code.
+. Go to the Extensions marketplace (`Ctrl+Shift+X` / `Cmd+Shift+X`).
+. Search for **"Konveyor"** and install the extension.
+. Install the **Red Hat Language Support for Java** extension (required for Java code analysis).
+. Open the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`) and run:
++
+----
+Welcome: Open Walkthrough
+----
++
+Follow the Konveyor setup walkthrough to complete the initial configuration.
+
+[TIP]
+====
+For detailed installation instructions, see the
+https://github.com/konveyor/editor-extensions/blob/main/vscode/core/README.md[Konveyor VS Code Extension README].
+====
+
+==== Configure GenAI
+
+Set up your AI provider to enable AI-powered migration suggestions:
+
+. Open VS Code Settings (`Ctrl+,` / `Cmd+,`).
+. Search for **"Konveyor"** to find the extension settings.
+. Under **GenAI Settings**, configure your AI provider:
+** Select your provider (e.g., OpenAI, Anthropic, Azure OpenAI, Ollama, etc.).
+** Check if you already have an API key for any of the above providers, if not let the workshop instructor know.
+** Enter your API key or credentials.
+
+*Example Configurations:*
+
+ChatGPT (OpenAI):
+
+[source, yaml]
+models:
+  OpenAI: &active
+    environment:
+      OPENAI_API_KEY: "" # Required - either set here or in your environment variables
+    provider: ChatOpenAI
+    args:
+      model: gpt-5.4 # Required
+
+Claude API:
+
+[source, yaml]
+models:
+  OpenAI: &active
+    provider: ChatOpenAI
+    environment:
+      OPENAI_API_KEY: "" # Required - either set here or in your environment variables
+    args:
+      model: claude-sonnet-4-6 # Required
+      configuration:
+        baseURL: "https://api.anthropic.com/v1/"
+
+Ollama:
+
+[source, yaml]
+models:
+  ChatOllama: &active
+    provider: ChatOllama
+    args:
+      model: gemma4:31b # example using Gemma 4, adjust to your installed model
+      baseUrl: "http://localhost:11434" # Required
+
+[NOTE]
+====
+Recommended models for local LLM execution include:
+
+* https://ollama.com/library/gemma4[Gemma 4]
+** gemma4:31b - needs > 31 GB of RAM, so recommended for 64 GB RAM machines
+** gemma4:e4b - a smaller version of the above, needs ~ 10 GB of RAM, so recommended for 32 GB RAM machines
+* https://ollama.com/library/glm-4.7-flash[GLM 4.7 - Flash] - glm-4.7-flash:latest - needs 20 GB of RAM, so recommended for 64 GB RAM machines
+====
+
+==== Create an Analysis Profile
+
+. Open the **Konveyor Analysis View** in the VS Code sidebar.
+. Open the profiles dropdown and select **"Manage Profiles"**.
+. Click **"+ New Profile"**.
+. Add the following target technologies:
+** `cloud-readiness`
+** `jakarta-ee`
+** `jakarta-ee9`
+** `java-ee`
+** `openjdk17`
+** `spring-boot3+`
+** `spring-security6+`
+
+[TIP]
+====
+You can also add custom rulesets if you have specific migration rules for your organization.
+====
+
+==== Run Analysis
+
+. In the Konveyor Analysis View, start the **analysis server**.
+. Click **"Run Analysis"**.
+. Wait for the analysis to complete and review the detected issues.
+
+Expected issues include:
+
+* Spring Boot version not compatible with Jakarta EE 9+
+* `javax` packages need to be replaced by `jakarta`
+* Deprecated Spring Security configuration patterns (if applicable)
+
+==== Apply Migration Fixes with AI
+
+For each detected issue, use the Konveyor AI to generate and apply fixes:
+
+. **Spring Boot Version**
+** Click the tool icon next to the Spring Boot version issue.
+** Review the AI-suggested changes (e.g., Boot 2.x → 3.x, Java version → 17).
+** Accept the suggested fix.
+
+. **javax → jakarta Migration**
+** Select the package migration issues.
+** Review the suggested import changes (e.g., `javax.servlet` → `jakarta.servlet`).
+** Accept the changes across all affected files.
+
+. **Spring Security Configuration**
+** Review suggestions for migrating deprecated patterns
+(e.g., `WebSecurityConfigurerAdapter` → bean-based `SecurityFilterChain`).
+** Accept the changes.
+
+[NOTE]
+====
+After each fix is applied, the analysis may re-run automatically to update the remaining issues.
+====
+
+==== Verify the Migration
+
+[CAUTION]
+.Switch to Java 17 (or higher)
+====
+After the migration to Spring Boot 3, you need Java 17 to build and run the application.
+====
+
+After applying all fixes, verify that the application builds and runs correctly:
+
+[source, bash]
+----
+./mvnw clean install
+----
+
+You should see a successful build output. Then run the application:
+
+[source, bash]
+----
+./mvnw spring-boot:run
+----
+
+=== Exercise 4 (Bonus): Migrate from local File Access to Storage Service
+
+Though we now have switched to the current Spring Boot 3,
+the application is still working with a local file store
+as found out in the analysis of the previous exercises.
+This requires an architectural change (re-architect).
+We would like to store the files in a respective storage service
+as provided by the underlying cloud provider or platform.
+
+As we will not use a real cloud provider in the workshop,
+we propose to use a local implementation of AWS S3 with https://github.com/ministackorg/ministack[Ministack].
+
+Whatever solution you choose, it most probably affects the following parts of your implementation:
+
+* Cloud Stack (local link:docker-compose.yml[Docker compose] file).
+* Configuration (link:src/main/resources/application.properties[application properties], perhaps Spring profiles).
+* Dependency management (link:pom.xml[Maven configuration]).
+* Implementation (of at least link:src/main/java/org/springframework/samples/petclinic/images/ImageController.java[ImageController],
+beyond switching the underlying storage, you may have to introduce further configurations, tests etc.).
+
+== Cleanup
+
+CAUTION: Clean up the environment after the workshop.
+
+[source, bash]
+.Stop Docker containers
+----
+${DOCKER_BIN:-docker} compose down
+----
+
+If you set up Konveyor Hub on minikube:
+
+[source, bash]
+.Stop minikube
+----
+minikube stop
+----
