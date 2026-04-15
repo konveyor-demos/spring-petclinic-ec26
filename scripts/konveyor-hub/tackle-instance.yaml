@@ -1,0 +1,10 @@
+kind: Tackle
+apiVersion: tackle.konveyor.io/v1alpha1
+metadata:
+  name: tackle
+  namespace: konveyor-tackle
+spec:
+  feature_auth_required: "false"
+  kai_solution_server_enabled: true
+  rwx_supported: "false"
+  ui_ingress_class_name: nginx # Use "traefik" if using Rancher Desktop ingress

@@ -185,64 +185,55 @@ In the next exercises, we will use Konveyor to analyze and address such issues.
 In this exercise, we install Konveyor Hub on a Kubernetes cluster,
 explore its features, and run an analysis of the Spring PetClinic application.
 
-==== Set up OLM (Operator Lifecycle Manager)
+==== Enable ingress (minikube only)
 
-Konveyor is installed via OLM. Set it up for your Kubernetes environment.
+If you are using minikube, enable the ingress addon so the Konveyor Hub UI
+can be exposed later:
 
-.For minikube
 [source, bash]
 ----
-minikube addons enable olm
 minikube addons enable ingress
 ----
 
-.For standard Kubernetes (Docker Desktop, Rancher Desktop)
-[source, bash]
-----
-kubectl apply -f https://raw.githubusercontent.com/operator-framework/operator-lifecycle-manager/master/deploy/upstream/quickstart/crds.yaml
-kubectl apply -f https://raw.githubusercontent.com/operator-framework/operator-lifecycle-manager/master/deploy/upstream/quickstart/olm.yaml
-----
+For Docker Desktop / Rancher Desktop, use their built-in ingress or
+`kubectl port-forward` (see link:#_access_the_konveyor_hub_ui[Access the Konveyor Hub UI] below).
 
-==== Install the Konveyor Operator
+==== Install Konveyor Hub with the provided script
 
-Deploy the Konveyor operator using the latest development manifest:
+The repository ships a script that automates the full Konveyor Hub installation:
 
-[source, bash]
-----
-kubectl apply -f https://raw.githubusercontent.com/konveyor/tackle2-operator/main/tackle-k8s.yaml
-----
-
-This creates the `konveyor-tackle` namespace and installs the required OLM components.
-
-[TIP]
-====
-For released versions, you can also install via https://operatorhub.io/operator/konveyor-operator[OperatorHub].
-For more details, see the https://github.com/konveyor/operator/blob/main/README.md[Konveyor Operator README].
-====
-
-==== Create the Tackle Custom Resource
+* installs the Operator Lifecycle Manager (OLM),
+* applies the Konveyor operator manifest from link:scripts/konveyor-hub/konveyor-operator-stable.yaml[`scripts/konveyor-hub/konveyor-operator-stable.yaml`] (stable channel),
+* waits for the operator and its CRDs to become ready, and
+* creates the Tackle custom resource from link:scripts/konveyor-hub/tackle-instance.yaml[`scripts/konveyor-hub/tackle-instance.yaml`].
 
 [IMPORTANT]
 ====
 Konveyor requires a storage class that supports RWX (ReadWriteMany) volumes.
 Review your cluster's storage capabilities before proceeding.
+
+If you use Rancher Desktop, edit link:scripts/konveyor-hub/tackle-instance.yaml[`tackle-instance.yaml`]
+and change `ui_ingress_class_name` from `nginx` to `traefik` before running the script.
 ====
+
+Run the script from the `scripts/` directory (it references its resources via relative paths):
 
 [source, bash]
 ----
-cat << EOF | kubectl apply -f -
-kind: Tackle
-apiVersion: tackle.konveyor.io/v1alpha1
-metadata:
-  name: tackle
-  namespace: konveyor-tackle
-spec:
-  feature_auth_required: "false"
-  kai_solution_server_enabled: true
-  rwx_supported: "false"
-  ui_ingress_class_name: nginx # Use "traefik" if using Rancher Desktop ingress
-EOF
+cd scripts
+./install_konveyor_hub.sh
+cd ..
 ----
+
+[TIP]
+====
+The script pins the OLM version (`OLM_VERSION`) and the Konveyor release channel
+(`KONVEYOR_VERSION`, defaulting to `stable`) at the top of the file.
+Edit these values if you need a different version or the `alpha` channel.
+
+For released versions you can alternatively install via https://operatorhub.io/operator/konveyor-operator[OperatorHub].
+For more details, see the https://github.com/konveyor/operator/blob/main/README.md[Konveyor Operator README].
+====
 
 ==== Verify the Deployment
 
